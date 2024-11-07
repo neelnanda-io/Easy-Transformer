@@ -29,6 +29,8 @@ def convert_nanogpt_weights(old_state_dict, cfg: HookedTransformerConfig):
     if "transformer.ln_f.bias" in old_state_dict:
         bias = True
         new_state_dict["ln_final.b"] = old_state_dict["transformer.ln_f.bias"]
+    else:
+        new_state_dict["unembed.b_U"] = torch.zeros(cfg.d_vocab, dtype=cfg.dtype)
 
     for layer in range(cfg.n_layers):
         layer_key = f"transformer.h.{layer}"
@@ -42,6 +44,11 @@ def convert_nanogpt_weights(old_state_dict, cfg: HookedTransformerConfig):
         new_state_dict[f"blocks.{layer}.ln2.b"] = torch.zeros_like(
             old_state_dict[f"{layer_key}.ln_2.weight"]
         )
+
+        new_state_dict[f"blocks.{layer}.attn.mask"] = torch.tril(
+            torch.ones((cfg.n_ctx, cfg.n_ctx)).bool()
+        )
+        new_state_dict[f"blocks.{layer}.attn.IGNORE"] = torch.tensor(-torch.inf)
 
         W = old_state_dict[f"{layer_key}.attn.c_attn.weight"]
         W_Q, W_K, W_V = torch.tensor_split(W, 3, dim=0)
@@ -84,5 +91,18 @@ def convert_nanogpt_weights(old_state_dict, cfg: HookedTransformerConfig):
             new_state_dict[f"blocks.{layer}.attn.b_O"] = old_state_dict[
                 f"{layer_key}.attn.c_proj.bias"
             ]
+        else:
+            new_state_dict[f"blocks.{layer}.mlp.b_out"] = torch.zeros(cfg.d_model, dtype=cfg.dtype)
+            new_state_dict[f"blocks.{layer}.mlp.b_in"] = torch.zeros(cfg.d_mlp, dtype=cfg.dtype)
+            new_state_dict[f"blocks.{layer}.attn.b_Q"] = torch.zeros(
+                (cfg.n_heads, cfg.d_head), dtype=cfg.dtype
+            )
+            new_state_dict[f"blocks.{layer}.attn.b_K"] = torch.zeros(
+                cfg.n_heads, cfg.d_head, dtype=cfg.dtype
+            )
+            new_state_dict[f"blocks.{layer}.attn.b_V"] = torch.zeros(
+                cfg.n_heads, cfg.d_head, dtype=cfg.dtype
+            )
+            new_state_dict[f"blocks.{layer}.attn.b_O"] = torch.zeros(cfg.d_model, dtype=cfg.dtype)
 
     return new_state_dict

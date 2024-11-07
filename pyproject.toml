@@ -14,7 +14,7 @@
 
     [tool.poetry.dependencies]
         accelerate=">=0.23.0" # Needed for Llama Models
-        beartype="^0.14.1"
+        beartype=">=0.14.1"
         better-abc="^0.0.3"
         datasets=">=2.7.1"
         einops=">=0.6.0"
@@ -129,10 +129,7 @@
     # All rules apart from base are shown explicitly below
     deprecateTypingAliases=true
     disableBytesTypePromotions=true
-    exclude = [
-        "*/**/*.py",
-        "!/transformer_lens/hook_points.py"
-    ]
+    exclude=["!/transformer_lens/hook_points.py", "*/**/*.py"]
     reportAssertAlwaysTrue=true
     reportConstantRedefinition=true
     reportDeprecated=true
@@ -188,4 +185,3 @@
     strictListInference=true
     strictParameterNoneValue=true
     strictSetInference=true
-    
