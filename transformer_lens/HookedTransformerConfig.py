@@ -340,7 +340,7 @@ class HookedTransformerConfig:
         assert self.default_prepend_bos in [
             True,
             False,
-        ], f"padding_side must be either True or False, but {self.default_prepend_bos} is given"
+        ], f"default_prepend_bos must be either True or False, but {self.default_prepend_bos} is given"
 
     @classmethod
     def unwrap(cls, config: Union[Dict, "HookedTransformerConfig"]) -> HookedTransformerConfig:

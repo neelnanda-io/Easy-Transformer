@@ -112,7 +112,7 @@ class HookedTransformer(HookedRootModule):
         cfg: Union[HookedTransformerConfig, Dict],
         tokenizer: Optional[PreTrainedTokenizerBase] = None,
         move_to_device: bool = True,
-        default_padding_side: Literal["left", "right"] = "right",
+        default_padding_side: Optional[Literal["left", "right"]] = None,
     ):
         """Model initialization.
 
@@ -170,9 +170,9 @@ class HookedTransformer(HookedRootModule):
             # will pass in tokens directly. In this case, we don't need a tokenizer.
             assert self.cfg.d_vocab != -1, "Must provide a tokenizer if d_vocab is not provided"
             self.tokenizer = None
-            if default_padding_side != "right":
+            if default_padding_side != None:
                 logging.warning(
-                    "default_padding_side is explictly given but ignored because tokenizer is not set."
+                    "default_padding_side is explicitly given but ignored because tokenizer is not set."
                 )
 
         self.embed = Embed(self.cfg)
@@ -666,7 +666,7 @@ class HookedTransformer(HookedRootModule):
     def set_tokenizer(
         self,
         tokenizer,
-        default_padding_side="right",
+        default_padding_side=None,
     ):
         """Set the tokenizer to use for this model.
 
@@ -682,7 +682,8 @@ class HookedTransformer(HookedRootModule):
         assert default_padding_side in [
             "right",
             "left",
-        ], f"padding_side must be 'right' or 'left', got {default_padding_side}"
+            None,
+        ], f"padding_side must be 'right', 'left' or 'None', got {default_padding_side}"
 
         # Use a tokenizer that is initialized with add_bos_token=True as the default tokenizer.
         # Such a tokenizer should be set as the default tokenizer because the tokenization of some
@@ -692,7 +693,14 @@ class HookedTransformer(HookedRootModule):
         tokenizer_with_bos = utils.get_tokenizer_with_bos(tokenizer)
         self.tokenizer = tokenizer_with_bos
         assert self.tokenizer is not None  # keep mypy happy
-        self.tokenizer.padding_side = default_padding_side
+
+        # If user passes default_padding_side explicitly, use that value
+        if default_padding_side is not None:
+            self.tokenizer.padding_side = default_padding_side
+        # If not, then use the tokenizer's default padding side
+        # If the tokenizer doesn't have a default padding side, use the global default "right"
+        if self.tokenizer.padding_side is None:
+            self.tokenizer.padding_side = "right"
 
         # Some tokenizers doesn't automatically prepend the BOS token even when they are initialized
         # with add_bos_token=True. Therefore, we need this information to dynamically control prepend_bos.
@@ -1083,7 +1091,7 @@ class HookedTransformer(HookedRootModule):
         move_to_device: bool = True,
         fold_value_biases: bool = True,
         default_prepend_bos: Optional[bool] = None,
-        default_padding_side: Literal["left", "right"] = "right",
+        default_padding_side: Optional[Literal["left", "right"]] = None,
         dtype="float32",
         first_n_layers: Optional[int] = None,
         **from_pretrained_kwargs,
@@ -1222,8 +1230,11 @@ class HookedTransformer(HookedRootModule):
             dtype: What data type to load the model in (also sets the dtype of
                 the HuggingFace model). Set to bfloat16 or float16 if you get out of memory errors when loading
                 the model.
-            default_padding_side: Which side to pad on when tokenizing. Defaults to
-                "right".
+            default_padding_side: Which side to pad on when tokenizing.
+                Resolution order for default_padding_side:
+                1. If user passes value explicitly, use that value
+                2. If tokenizer has a default padding side, use that value
+                3. Global default ("right")
             first_n_layers: If specified, only load the first n layers of the model.
         """
         if model_name.lower().startswith("t5"):
@@ -1357,7 +1368,7 @@ class HookedTransformer(HookedRootModule):
         fold_value_biases=False,
         dtype=torch.float32,
         default_prepend_bos=None,
-        default_padding_side="right",
+        default_padding_side=None,
         **from_pretrained_kwargs,
     ):
         """Wrapper for from_pretrained.
