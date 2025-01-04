@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+	<title>TransformerLens models</title>
+	<script src="https://cdn.jsdelivr.net/npm/ag-grid-community/dist/ag-grid-community.min.js"></script>
+	<style>
+		header {
+			background-color: #f4f4f4;
+			padding: 10px;
+			text-align: left;
+		}
+
+		body,
+		html {
+			margin: 0;
+			padding: 0;
+			width: 100%;
+			/* Ensure the body takes up full viewport width */
+		}
+
+		.ag-theme-alpine {
+			height: 80%;
+			width: 100%;
+			/* This should already keep the grid within the page width */
+			box-sizing: border-box;
+			/* Ensure padding and borders are included in the width */
+		}
+
+		.ag-paging-panel {
+			/* Aligns children (the pagination buttons) to the start of the container, i.e., left side */
+			justify-content: flex-start;
+			align-items: center;
+		}
+	</style>
+</head>
+
+<body>
+	<header>
+		Model table for <a href="https://github.com/neelnanda-io/TransformerLens">TransformerLens</a>. Source code: <a
+			href="https://github.com/mivanit/transformerlens-model-table">github.com/mivanit/transformerlens-model-table</a>.
+		Hover a cell to view full text, left click to copy to clipboard, right click to open contents in new tab.
+	</header>
+
+	<div id="modelTable" class="ag-theme-alpine"></div>
+
+	<script>
+		const CLICK_TO_COPY_EMOJI = String.fromCodePoint(0x1F446) + String.fromCodePoint(0x1F4CB);
+		// read a jsonl file
+		async function fetchJsonlData(url) {
+			const response = await fetch(url);
+			const text = await response.text();
+			return text.trim().split('\n').map(line => JSON.parse(line));
+		}
+
+		async function fetchVersion() {
+			try {
+				const response = await fetch('model_table.version');
+				// load the contents of the file as json
+				return response.json().then(json => json.version);
+			} catch (error) {
+				console.error('Could not fetch version: ', error);
+				return 'unknown';
+			}
+		}
+
+		// fancy cell rendering -- hover/copy/open the data, make it emojis if its too long
+		function longCellRenderer(params) {
+			// Create the div element
+			var div = document.createElement('div');
+			div.title = params.value; // Set the title text to the full text
+			div.style.cursor = 'pointer'; // Ensure the cursor style is set
+			// If its too long, make it emojis
+			if (params.value !== null) {
+				if (params.value.length > 50) {
+					div.textContent = CLICK_TO_COPY_EMOJI;
+					div.style.cssText = 'font-size: 20px; display: flex; justify-content: center; align-items: center; background-color: #f4f4f4; border: 1px solid #d4d4d4; border-radius: 5px; height: 30px; width: 60px; cursor: pointer;';
+				}
+			}
+
+			// Add click event listener to copy text to the clipboard
+			div.onclick = function () {
+				navigator.clipboard.writeText(params.value).then(function () {
+					console.log('Successfully copied to clipboard');
+				}).catch(function (err) {
+					console.error('Could not copy text to clipboard: ', err);
+				});
+			};
+
+			// On right click, open a new plain text tab whose contents are the cell's value
+			div.oncontextmenu = function (event) {
+				event.preventDefault(); // Prevent the default context menu from appearing
+				const newWindowName = params.node.data['name.default_alias'] + ' : ' + params.colDef.headerName;
+				const newWindow = window.open('', newWindowName);
+				// Set the title of the page to the rows "name.default_alias" and the column's header
+				newWindow.document.write('<title>' + newWindowName + '</title>');
+				// Set the contents of the new window to the cell's value
+				newWindow.document.write('<pre>' + params.value + '</pre>');
+				// newWindow.document.close();
+				return false; // Prevent the default context menu from appearing
+			};
+
+			// Return the div as the cell's DOM
+			return div;
+		}
+
+		// huggingface model name cell renderer -- add a link to the model page
+		function hf_link_cell_renderer(params) {
+			// Create the div element
+			var div = document.createElement('div');
+			div.style.cursor = 'pointer'; // Ensure the cursor style is set
+			// If its too long, make it emojis
+			if (params.value !== null) {
+				// make a link with the text of the value, pointing to https://huggingface.co/{x}
+				// make it open in a new tab
+				div.innerHTML = `<a href="https://huggingface.co/${params.value}" target="_blank" rel="noopener noreferrer">${params.value}</a>`;
+				div.style.cssText = 'cursor: pointer;';
+			}
+			// Return the div as the cell's DOM
+			return div;
+		}
+
+		function value_formatter(params) {
+			if (params.value === null) {
+				return '';
+			}
+			return typeof params.value === 'object' ? JSON.stringify(params.value) : params.value;
+		}
+
+		async function setupGrid() {
+			const version = await fetchVersion();
+			document.querySelector('header').innerHTML = `Interactive Model table for <a href="https://github.com/neelnanda-io/TransformerLens">TransformerLens</a> v${version}.  Hover a cell with [${CLICK_TO_COPY_EMOJI}] to view full text, left click to copy to clipboard, right click to open contents in new tab.`;
+
+			// read the data
+			const rowData = await fetchJsonlData('model_table/data.jsonl');
+			const columnGroups = {};
+
+			// create the column definitions
+			Object.keys(rowData[0]).forEach(key => {
+				// if key ends with "__", then ignore it (raw tensor shapes)
+				if (key.endsWith('__')) {
+					return;
+				}
+				// treat dot separated keys as column groups
+				const keyParts = key.split('.');
+				if (keyParts.length === 2) {
+					// column in a group
+					const groupName = keyParts[0];
+					const fieldName = keyParts[1];
+					// init an empty group if it doesn't exist
+					if (!columnGroups[groupName]) {
+						columnGroups[groupName] = {
+							headerName: groupName,
+							children: [],
+						};
+					}
+					// add the column to the group
+					const columnDef = {
+						headerName: fieldName,
+						field: key,
+						// if it's an object, stringify it
+						valueFormatter: value_formatter,
+						// only show the first child if there are many (we modify this later in some special cases)
+						columnGroupShow: columnGroups[groupName].children.length < 1 ? null : 'open',
+						// hacky width calculation (doesn't work great)
+						width: Math.min(Math.max(130, key.length * 5), 500),
+						// numeric if it's a number
+						type: typeof rowData[0][key] === 'number' ? 'numericColumn' : 'textColumn',
+					};
+
+					// special renderer for tensor shapes
+					if (groupName === 'tensor_shapes') {
+						columnDef.cellRenderer = longCellRenderer;
+					}
+
+					// special renderer for huggingface model name
+					if (groupName === 'name' && fieldName === 'huggingface') {
+						columnDef.cellRenderer = hf_link_cell_renderer;
+					}
+
+					columnGroups[groupName].children.push(columnDef);
+				} else {
+					// solo column
+					const columnDef = {
+						headerName: key,
+						field: key,
+						valueFormatter: value_formatter,
+					};
+					// special renderer for full cfg
+					if (key === 'config') {
+						columnDef.cellRenderer = longCellRenderer;
+					}
+					columnGroups[key] = columnDef;
+				}
+			});
+
+			// special modifications
+			columnGroups['model_type'].width = 130;
+			columnGroups['config'].width = 100;
+			columnGroups['tensor_shapes'].width = 200;
+			// open these groups by default
+			columnGroups['tensor_shapes'].openByDefault = true;
+			columnGroups['cfg'].openByDefault = true;
+
+			const columnDefs = Object.values(columnGroups);
+
+			// create the grid
+			const gridOptions = {
+				columnDefs: columnDefs,
+				rowData: rowData,
+				rowSelection: 'multiple',
+				// customize pagination
+				pagination: true,
+				paginationPageSize: 500,
+				paginationPageSizeSelector: [10, 25, 50, 100, 500, 1000],
+				enableCellTextSelection: true,
+				enableBrowserTooltips: true,
+				// default column options
+				defaultColDef: {
+					resizable: true,
+					filter: true,
+					// always show the floating filter
+					floatingFilter: true,
+					// disable filter hamburger menu (for space)
+					menuTabs: [],
+				},
+				// we assume dots are groups, don't treat them as field notation
+				suppressFieldDotNotation: true,
+				// define column type to avoid warning
+				columnTypes: {
+					textColumn: {},
+				},
+				// this disables animations, but makes the horizontal scrolling not painfully slow
+				domLayout: 'print',
+			};
+
+			// create the grid
+			new agGrid.createGrid(document.getElementById('modelTable'), gridOptions);
+		}
+
+		setupGrid();
+	</script>
+</body>
+
+</html>

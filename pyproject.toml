@@ -68,6 +68,8 @@
             sphinx-autobuild={version=">=2021.3.14"}
             sphinxcontrib-napoleon={version=">=0.7"}
             tabulate={version=">=0.9.0"}
+            tiktoken = "^0.7.0"
+            muutils = "^0.6.15"
 
 [tool.pytest]
     [tool.pytest.ini_options]
@@ -130,10 +132,7 @@
     # All rules apart from base are shown explicitly below
     deprecateTypingAliases=true
     disableBytesTypePromotions=true
-    exclude = [
-        "*/**/*.py",
-        "!/transformer_lens/hook_points.py"
-    ]
+    exclude=["!/transformer_lens/hook_points.py", "*/**/*.py"]
     reportAssertAlwaysTrue=true
     reportConstantRedefinition=true
     reportDeprecated=true
@@ -189,4 +188,3 @@
     strictListInference=true
     strictParameterNoneValue=true
     strictSetInference=true
-    
