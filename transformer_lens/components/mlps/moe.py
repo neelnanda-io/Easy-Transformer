@@ -88,7 +88,8 @@ class MoE(CanBeUsedAsMLP):
         # both are [batch, pos, experts_per_token]
         weights = self.hook_expert_weights(F.softmax(gate_logits, dim=1, dtype=torch.float))
         weights, expert_indices = torch.topk(weights, self.experts_per_token, dim=-1)
-        weights /= weights.sum(dim=-1, keepdim=True)
+        if self.cfg.norm_topk_prob:
+            weights /= weights.sum(dim=-1, keepdim=True)
         expert_indices = self.hook_expert_indices(expert_indices)
         weights = weights.to(x.dtype)
 

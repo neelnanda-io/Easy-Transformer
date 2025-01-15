@@ -137,7 +137,6 @@ class HookedTransformer(HookedRootModule):
             )
 
         self.cfg = HookedTransformerConfig.unwrap(cfg)
-
         if tokenizer is not None:
             self.set_tokenizer(tokenizer, default_padding_side=default_padding_side)
         elif self.cfg.tokenizer_name is not None:
@@ -155,13 +154,17 @@ class HookedTransformer(HookedRootModule):
                 if "phi" in self.cfg.tokenizer_name.lower():
                     use_fast = False
                 huggingface_token = os.environ.get("HF_TOKEN", None)
+                add_bos_token = self.cfg.original_architecture not in [
+                    "OlmoForCausalLM",
+                    "OlmoeForCausalLM",
+                ]
                 self.set_tokenizer(
                     AutoTokenizer.from_pretrained(
                         self.cfg.tokenizer_name,
-                        add_bos_token=True,
                         trust_remote_code=self.cfg.trust_remote_code,
                         use_fast=use_fast,
                         token=huggingface_token,
+                        add_bos_token=add_bos_token,
                     ),
                     default_padding_side=default_padding_side,
                 )
@@ -689,7 +692,13 @@ class HookedTransformer(HookedRootModule):
         # tokenizers like LlamaTokenizer are different when bos token is automatically/manually
         # prepended, and add_bos_token cannot be dynamically controlled after initialization
         # (https://github.com/huggingface/transformers/issues/25886).
-        tokenizer_with_bos = utils.get_tokenizer_with_bos(tokenizer)
+        if self.cfg.original_architecture not in [
+            "OlmoForCausalLM",
+            "OlmoeForCausalLM",
+        ]:
+            tokenizer_with_bos = utils.get_tokenizer_with_bos(tokenizer)
+        else:
+            tokenizer_with_bos = tokenizer
         self.tokenizer = tokenizer_with_bos
         assert self.tokenizer is not None  # keep mypy happy
         self.tokenizer.padding_side = default_padding_side
@@ -1749,18 +1758,18 @@ class HookedTransformer(HookedRootModule):
         if not self.cfg.final_rms and fold_biases:
             # Dumb bug from my old SoLU training code, some models have RMSNorm instead of LayerNorm
             # pre unembed.
-            state_dict[f"unembed.b_U"] = state_dict[f"unembed.b_U"] + (
-                state_dict[f"unembed.W_U"] * state_dict[f"ln_final.b"][:, None]
+            state_dict["unembed.b_U"] = state_dict["unembed.b_U"] + (
+                state_dict["unembed.W_U"] * state_dict["ln_final.b"][:, None]
             ).sum(dim=-2)
-            del state_dict[f"ln_final.b"]
+            del state_dict["ln_final.b"]
 
-        state_dict[f"unembed.W_U"] = state_dict[f"unembed.W_U"] * state_dict[f"ln_final.w"][:, None]
-        del state_dict[f"ln_final.w"]
+        state_dict["unembed.W_U"] = state_dict["unembed.W_U"] * state_dict["ln_final.w"][:, None]
+        del state_dict["ln_final.w"]
 
         if center_weights:
             # Center the weights that read in from the LayerNormPre
-            state_dict[f"unembed.W_U"] -= einops.reduce(
-                state_dict[f"unembed.W_U"], "d_model d_vocab -> 1 d_vocab", "mean"
+            state_dict["unembed.W_U"] -= einops.reduce(
+                state_dict["unembed.W_U"], "d_model d_vocab -> 1 d_vocab", "mean"
             )
 
         return state_dict

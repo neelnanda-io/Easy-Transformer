@@ -22,8 +22,8 @@
         jaxtyping=">=0.2.11"
         numpy=[
             {version=">=1.20,<1.25", python=">=3.8,<3.9"},
-            {version=">=1.24", python=">=3.9,<3.12"},
-            {version=">=1.26", python=">=3.12,<3.13"},
+            {version="~1.24", python=">=3.9,<3.12"},
+            {version="~1.26", python=">=3.12,<3.13"},
         ]
         pandas=">=1.1.5"
         python=">=3.8,<4.0"
@@ -34,7 +34,7 @@
             {platform="linux", version=">=1.10"},                 # We can use any torch version on Linux (e.g colab)
         ]
         tqdm=">=4.64.1"
-        transformers=">=4.37.2"
+        transformers=">=4.40.0"
         typing-extensions="*"
         wandb=">=0.13.5"
         typeguard = "^4.2"

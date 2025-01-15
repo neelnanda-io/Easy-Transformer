@@ -192,8 +192,7 @@ class HookedTransformerConfig:
         NTK_by_parts_factor (float): The overall factor used in the "NTK-by-parts" method that
             affects the rate of change between low and high-frequency interpolation strategies.
             Defaults to 8.0.
-
-
+        norm_topk_prob (bool): Whether to normalize the top-k probabilities in the MoE layer.
     """
 
     n_layers: int
@@ -262,6 +261,7 @@ class HookedTransformerConfig:
     NTK_by_parts_low_freq_factor: float = 1.0
     NTK_by_parts_high_freq_factor: float = 4.0
     NTK_by_parts_factor: float = 8.0
+    norm_topk_prob: bool = False
 
     def __post_init__(self):
         if self.n_heads == -1:
