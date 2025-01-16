@@ -1,6 +1,7 @@
 import torch
 
-from transformer_lens.components import AbstractAttention
+from transformer_lens.components import AbstractAttention, RotaryEmbedding
+from transformer_lens.HookedTransformerConfig import HookedTransformerConfig
 
 
 def test_create_alibi_slope():
@@ -38,3 +39,31 @@ def test_create_alibi_bias():
         assert torch.equal(
             torch.tril(matrix, diagonal=-1), torch.tril(ref_lower_triangle, diagonal=-1)
         )
+
+
+def test_rotary_attribute_access():
+    cfg = HookedTransformerConfig(
+        n_layers=12,
+        d_model=512,
+        n_ctx=1024,
+        d_head=64,
+        n_heads=8,
+        load_in_4bit=False,
+        dtype=torch.float32,
+        act_fn="relu",
+        rotary_dim=64,
+        rotary_base=10000,
+        rotary_adjacent_pairs=True,
+    )
+
+    rotary_module = RotaryEmbedding(cfg)
+
+    class DummyAttention(AbstractAttention):
+        def __init__(self):
+            super().__init__(cfg)
+            self.rotary_module = rotary_module
+
+    attention = DummyAttention()
+
+    assert torch.equal(attention.rotary_sin, rotary_module.rotary_sin), "rotary_sin does not match!"
+    assert torch.equal(attention.rotary_cos, rotary_module.rotary_cos), "rotary_cos does not match!"

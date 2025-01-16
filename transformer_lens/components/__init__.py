@@ -22,6 +22,7 @@ from .embed import Embed
 from .grouped_query_attention import GroupedQueryAttention
 from .mlps.gated_mlp import GatedMLP
 from .mlps.mlp import MLP
+from .rotary_embeddings import RotaryEmbedding
 
 # Interdependent modules
 from .bert_block import BertBlock
