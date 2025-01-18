@@ -3,7 +3,7 @@
     description="An implementation of transformers tailored for mechanistic interpretability."
     license="MIT"
     name="transformer-lens"
-    packages=[{include="transformer_lens"}]
+    packages=[{include="transformer_lens"}, {include="transformer_lens/py.typed"}]
     readme="README.md"
     # Version is automatically set by the pipeline on release
     version="0.0.0"
