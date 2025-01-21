@@ -42,4 +42,4 @@ class TestMatchHuggingFace:
             )
             hf_out, _, _ = hf_model.transformer.h[layer_n].attn(hidden_states=input)
 
-            # assert torch.sum(tl_out == hf_out) == math.prod(tl_out.shape)
+            assert torch.sum(tl_out == hf_out) == math.prod(tl_out.shape)
