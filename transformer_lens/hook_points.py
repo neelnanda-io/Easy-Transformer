@@ -89,6 +89,7 @@ class HookPoint(nn.Module):
         is_permanent: bool = False,
         level: Optional[int] = None,
         prepend: bool = False,
+        skip_verbose_naming=False,
     ) -> None:
         """
         Hook format is fn(activation, hook_name)
@@ -108,9 +109,10 @@ class HookPoint(nn.Module):
                 module_output = module_output[0]
             return hook(module_output, hook=self)
 
-        full_hook.__name__ = (
-            hook.__repr__()
-        )  # annotate the `full_hook` with the string representation of the `hook` function
+        if not skip_verbose_naming:
+            full_hook.__name__ = (
+                hook.__repr__()
+            )  # annotate the `full_hook` with the string representation of the `hook` function
 
         if dir == "fwd":
             pt_handle = self.register_forward_hook(full_hook)
@@ -261,6 +263,7 @@ class HookedRootModule(nn.Module):
         is_permanent: bool = False,
         level: Union[int, None] = None,
         prepend: bool = False,
+        skip_verbose_naming: bool = False,
     ) -> None:
         """Runs checks on the hook, and then adds it to the hook point"""
 
@@ -272,7 +275,14 @@ class HookedRootModule(nn.Module):
             is_permanent=is_permanent,
             prepend=prepend,
         )
-        hook_point.add_hook(hook, dir=dir, is_permanent=is_permanent, level=level, prepend=prepend)
+        hook_point.add_hook(
+            hook,
+            dir=dir,
+            is_permanent=is_permanent,
+            level=level,
+            prepend=prepend,
+            skip_verbose_naming=skip_verbose_naming,
+        )
 
     def check_hooks_to_add(
         self,
@@ -294,6 +304,7 @@ class HookedRootModule(nn.Module):
         is_permanent: bool = False,
         level: Union[int, None] = None,
         prepend: bool = False,
+        skip_verbose_naming: bool = False,
     ) -> None:
         if isinstance(name, str):
             hook_point = self.mod_dict[name]
@@ -308,6 +319,7 @@ class HookedRootModule(nn.Module):
                 is_permanent=is_permanent,
                 level=level,
                 prepend=prepend,
+                skip_verbose_naming=skip_verbose_naming,
             )
         else:
             # Otherwise, name is a Boolean function on names
@@ -321,6 +333,7 @@ class HookedRootModule(nn.Module):
                         is_permanent=is_permanent,
                         level=level,
                         prepend=prepend,
+                        skip_verbose_naming=skip_verbose_naming,
                     )
 
     def add_perma_hook(
@@ -331,15 +344,24 @@ class HookedRootModule(nn.Module):
     ) -> None:
         self.add_hook(name, hook, dir=dir, is_permanent=True)
 
-    def _enable_hook_with_name(self, name: str, hook: Callable, dir: Literal["fwd", "bwd"]):
+    def _enable_hook_with_name(
+        self,
+        name: str,
+        hook: Callable,
+        dir: Literal["fwd", "bwd"],
+        skip_verbose_naming: bool = False,
+    ):
         """This function takes a key for the mod_dict and enables the related hook for that module
 
         Args:
             name (str): The module name
             hook (Callable): The hook to add
             dir (Literal[&quot;fwd&quot;, &quot;bwd&quot;]): The direction for the hook
+            skip_verbose_naming (bool): If True, skips the assignment of the string representation of `hook` to `full_hook.__name__`.
         """
-        self.mod_dict[name].add_hook(hook, dir=dir, level=self.context_level)
+        self.mod_dict[name].add_hook(
+            hook, dir=dir, level=self.context_level, skip_verbose_naming=skip_verbose_naming
+        )
 
     def _enable_hooks_for_points(
         self,
@@ -347,6 +369,7 @@ class HookedRootModule(nn.Module):
         enabled: Callable,
         hook: Callable,
         dir: Literal["fwd", "bwd"],
+        skip_verbose_naming: bool = False,
     ):
         """Enables hooks for a list of points
 
@@ -355,24 +378,40 @@ class HookedRootModule(nn.Module):
             enabled (Callable): _description_
             hook (Callable): _description_
             dir (Literal[&quot;fwd&quot;, &quot;bwd&quot;]): _description_
+            skip_verbose_naming (bool): If True, skips the assignment of the string representation of `hook` to `full_hook.__name__`.
         """
         for hook_name, hook_point in hook_points:
             if enabled(hook_name):
-                hook_point.add_hook(hook, dir=dir, level=self.context_level)
+                hook_point.add_hook(
+                    hook, dir=dir, level=self.context_level, skip_verbose_naming=skip_verbose_naming
+                )
 
-    def _enable_hook(self, name: Union[str, Callable], hook: Callable, dir: Literal["fwd", "bwd"]):
+    def _enable_hook(
+        self,
+        name: Union[str, Callable],
+        hook: Callable,
+        dir: Literal["fwd", "bwd"],
+        skip_verbose_naming: bool = False,
+    ):
         """Enables an individual hook on a hook point
 
         Args:
             name (str): The name of the hook
             hook (Callable): The actual hook
             dir (Literal[&quot;fwd&quot;, &quot;bwd&quot;], optional): The direction of the hook. Defaults to "fwd".
+            skip_verbose_naming (bool): If True, skips the assignment of the string representation of `hook` to `full_hook.__name__`.
         """
         if isinstance(name, str):
-            self._enable_hook_with_name(name=name, hook=hook, dir=dir)
+            self._enable_hook_with_name(
+                name=name, hook=hook, dir=dir, skip_verbose_naming=skip_verbose_naming
+            )
         else:
             self._enable_hooks_for_points(
-                hook_points=self.hook_dict.items(), enabled=name, hook=hook, dir=dir
+                hook_points=self.hook_dict.items(),
+                enabled=name,
+                hook=hook,
+                dir=dir,
+                skip_verbose_naming=skip_verbose_naming,
             )
 
     @contextmanager
@@ -382,6 +421,7 @@ class HookedRootModule(nn.Module):
         bwd_hooks: List[Tuple[Union[str, Callable], Callable]] = [],
         reset_hooks_end: bool = True,
         clear_contexts: bool = False,
+        skip_verbose_naming: bool = False,
     ):
         """
         A context manager for adding temporary hooks to the model.
@@ -392,6 +432,7 @@ class HookedRootModule(nn.Module):
             bwd_hooks: Same as fwd_hooks, but for the backward pass.
             reset_hooks_end (bool): If True, removes all hooks added by this context manager when the context manager exits.
             clear_contexts (bool): If True, clears hook contexts whenever hooks are reset.
+            skip_verbose_naming (bool): If True, skips the assignment of the string representation of `hook` to `full_hook.__name__`.
 
         Example:
 
@@ -404,9 +445,13 @@ class HookedRootModule(nn.Module):
             self.context_level += 1
 
             for name, hook in fwd_hooks:
-                self._enable_hook(name=name, hook=hook, dir="fwd")
+                self._enable_hook(
+                    name=name, hook=hook, dir="fwd", skip_verbose_naming=skip_verbose_naming
+                )
             for name, hook in bwd_hooks:
-                self._enable_hook(name=name, hook=hook, dir="bwd")
+                self._enable_hook(
+                    name=name, hook=hook, dir="bwd", skip_verbose_naming=skip_verbose_naming
+                )
             yield self
         finally:
             if reset_hooks_end:
