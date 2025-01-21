@@ -255,6 +255,81 @@ class HookedTransformer(HookedRootModule):
                 self.cfg.use_attn_in
             ), f"Cannot add hook {hook_point_name} if use_attn_in is False"
 
+    def get_pos_offset(self, past_kv_cache, batch_size):
+        # If we're doing caching, then we reuse keys and values from previous runs, as that's the
+        # only way that past activations will affect the final logits. The cache contains those so
+        # we don't need to recompute them. This is useful for generating text. As we have absolute
+        # positional encodings, to implement this we have a `pos_offset` variable, defaulting to
+        # zero, which says to offset which positional encodings are used (cached keys and values
+        # were calculated with their own positional encodings).
+        if past_kv_cache is None:
+            pos_offset = 0
+        else:
+            (
+                cached_batch_size,
+                cache_ctx_length,
+                num_heads_in_cache,
+                d_head_in_cache,
+            ) = past_kv_cache[0].past_keys.shape
+            assert cached_batch_size == batch_size
+            if self.cfg.n_key_value_heads is None:
+                assert num_heads_in_cache == self.cfg.n_heads
+            else:
+                assert num_heads_in_cache == self.cfg.n_key_value_heads
+            assert d_head_in_cache == self.cfg.d_head
+            pos_offset = cache_ctx_length
+        return pos_offset
+
+    def get_residual(
+        self,
+        embed,
+        pos_offset,
+        prepend_bos=USE_DEFAULT_VALUE,
+        attention_mask=None,
+        tokens=None,
+        return_shortformer_pos_embed=True,
+        device=None,
+    ):
+        if device is None:
+            device = devices.get_device_for_block_index(0, self.cfg)
+
+        if tokens is None:
+            # Because tokens only need for defining batch size and sequence length, we can simply synthesize them
+            tokens = torch.ones((embed.size(0), embed.size(1))).int().to(device)
+
+        if self.cfg.positional_embedding_type == "standard":
+            pos_embed = self.hook_pos_embed(
+                self.pos_embed(tokens, pos_offset, attention_mask)
+            )  # [batch, pos, d_model]
+            residual = embed + pos_embed  # [batch, pos, d_model]
+            shortformer_pos_embed = None
+        elif self.cfg.positional_embedding_type == "shortformer":
+            # If we're using shortformer style attention, we don't add the positional embedding to
+            # the residual stream. See HookedTransformerConfig for details
+            pos_embed = self.hook_pos_embed(
+                self.pos_embed(tokens, pos_offset, attention_mask)
+            )  # [batch, pos, d_model]
+            residual = embed
+            shortformer_pos_embed = pos_embed
+        elif self.cfg.positional_embedding_type == "rotary":
+            # Rotary doesn't use positional embeddings, instead they're applied when dot producting
+            # keys and queries. See HookedTransformerConfig for details
+            residual = embed
+            shortformer_pos_embed = None
+        elif self.cfg.positional_embedding_type == "alibi":
+            # ALiBi does not add positional embeddings to word embeddings,instead it biases QK attention scores.
+            residual = embed
+            shortformer_pos_embed = None
+        else:
+            raise ValueError(
+                f"Invalid positional_embedding_type passed in {self.cfg.positional_embedding_type}"
+            )
+
+        if return_shortformer_pos_embed:
+            return residual, shortformer_pos_embed
+        else:
+            return residual
+
     def input_to_embed(
         self,
         input: Union[str, List[str], Int[torch.Tensor, "batch pos"]],
@@ -325,59 +400,21 @@ class HookedTransformer(HookedRootModule):
             # We separate this case from for computational efficiency.
             attention_mask = None
 
-        # If we're doing caching, then we reuse keys and values from previous runs, as that's the
-        # only way that past activations will affect the final logits. The cache contains those so
-        # we don't need to recompute them. This is useful for generating text. As we have absolute
-        # positional encodings, to implement this we have a `pos_offset` variable, defaulting to
-        # zero, which says to offset which positional encodings are used (cached keys and values
-        # were calculated with their own positional encodings).
-        if past_kv_cache is None:
-            pos_offset = 0
-        else:
-            batch_size, ctx_length = tokens.shape
-            (
-                cached_batch_size,
-                cache_ctx_length,
-                num_heads_in_cache,
-                d_head_in_cache,
-            ) = past_kv_cache[0].past_keys.shape
-            assert cached_batch_size == batch_size
-            if self.cfg.n_key_value_heads is None:
-                assert num_heads_in_cache == self.cfg.n_heads
-            else:
-                assert num_heads_in_cache == self.cfg.n_key_value_heads
-            assert d_head_in_cache == self.cfg.d_head
-            pos_offset = cache_ctx_length
+        batch_size = tokens.shape[0]
+        pos_offset = self.get_pos_offset(past_kv_cache, batch_size)
+
         if self.cfg.use_hook_tokens:
             tokens = self.hook_tokens(tokens)
+
         embed = self.hook_embed(self.embed(tokens))  # [batch, pos, d_model]
-        if self.cfg.positional_embedding_type == "standard":
-            pos_embed = self.hook_pos_embed(
-                self.pos_embed(tokens, pos_offset, attention_mask)
-            )  # [batch, pos, d_model]
-            residual = embed + pos_embed  # [batch, pos, d_model]
-            shortformer_pos_embed = None
-        elif self.cfg.positional_embedding_type == "shortformer":
-            # If we're using shortformer style attention, we don't add the positional embedding to
-            # the residual stream. See HookedTransformerConfig for details
-            pos_embed = self.hook_pos_embed(
-                self.pos_embed(tokens, pos_offset, attention_mask)
-            )  # [batch, pos, d_model]
-            residual = embed
-            shortformer_pos_embed = pos_embed
-        elif self.cfg.positional_embedding_type == "rotary":
-            # Rotary doesn't use positional embeddings, instead they're applied when dot producting
-            # keys and queries. See HookedTransformerConfig for details
-            residual = embed
-            shortformer_pos_embed = None
-        elif self.cfg.positional_embedding_type == "alibi":
-            # ALiBi does not add positional embeddings to word embeddings,instead it biases QK attention scores.
-            residual = embed
-            shortformer_pos_embed = None
-        else:
-            raise ValueError(
-                f"Invalid positional_embedding_type passed in {self.cfg.positional_embedding_type}"
-            )
+        residual, shortformer_pos_embed = self.get_residual(
+            embed,
+            pos_offset,
+            prepend_bos,
+            attention_mask,
+            tokens,
+            return_shortformer_pos_embed=True,
+        )
         return residual, tokens, shortformer_pos_embed, attention_mask
 
     @overload
@@ -2030,7 +2067,12 @@ class HookedTransformer(HookedRootModule):
     @torch.inference_mode()
     def generate(
         self,
-        input: Union[str, Float[torch.Tensor, "batch pos"]] = "",
+        input: Union[
+            str,
+            List[str],
+            Int[torch.Tensor, "batch pos"],
+            Float[torch.Tensor, "batch pos hidden_size"],
+        ] = "",
         max_new_tokens: int = 10,
         stop_at_eos: bool = True,
         eos_token_id: Optional[int] = None,
@@ -2044,7 +2086,12 @@ class HookedTransformer(HookedRootModule):
         padding_side: Optional[Literal["left", "right"]] = USE_DEFAULT_VALUE,
         return_type: Optional[str] = "input",
         verbose: bool = True,
-    ) -> Union[Int[torch.Tensor, "batch pos_plus_new_tokens"], str]:
+    ) -> Union[
+        str,
+        List[str],
+        Int[torch.Tensor, "batch pos_plus_new_tokens"],
+        Float[torch.Tensor, "batch pos_plus_new_tokens hidden_size"],
+    ]:
         """Sample Tokens from the Model.
 
         Sample tokens from the model until the model outputs eos_token or max_new_tokens is reached.
@@ -2053,14 +2100,11 @@ class HookedTransformer(HookedRootModule):
         (by producing an EOT token), we keep running the model on the entire batch, but throw away
         the output for a finished sequence and just keep adding EOTs to pad.
 
-        This supports entering a single string, but not a list of strings - if the strings don't
-        tokenize to exactly the same length, this gets messy. If that functionality is needed,
-        convert them to a batch of tokens and input that instead.
-
         Args:
-            input (Union[str, Int[torch.Tensor, "batch pos"])]): Either a batch of tokens ([batch,
-                pos]) or a text string (this will be converted to a batch of tokens with batch size
-                1).
+            input (Union[str, List[str], Int[torch.Tensor, "batch pos"], Float[torch.Tensor, "batch pos hidden_size"]]):
+                A text string (this will be converted to a batch of tokens with batch
+                size 1), a list of strings, batch of tokens or a tensor of precomputed embeddings of shape
+                [batch, pos, hidden_size].
             max_new_tokens (int): Maximum number of tokens to generate.
             stop_at_eos (bool): If True, stop generating tokens when the model outputs eos_token.
             eos_token_id (Optional[Union[int, Sequence]]): The token ID to use for end
@@ -2077,7 +2121,7 @@ class HookedTransformer(HookedRootModule):
                 random (limit of temp -> 0 is just taking the top token, limit of temp -> inf is
                 sampling from a uniform distribution).
             freq_penalty (float): Frequency penalty for sampling - how much to penalise previous
-                tokens. Higher values will make the model more random.
+                tokens. Higher values will make the model more random. Works only with str and tokens input.
             use_past_kv_cache (bool): If True, create and use cache to speed up generation.
             prepend_bos (bool, optional): Overrides self.cfg.default_prepend_bos. Whether to prepend
                 the BOS token to the input (applicable when input is a string). Defaults to None,
@@ -2086,43 +2130,69 @@ class HookedTransformer(HookedRootModule):
             padding_side (Union[Literal["left", "right"], None], optional): Overrides
                 self.tokenizer.padding_side. Specifies which side to pad when tokenizing multiple
                 strings of different lengths.
-            return_type (Optional[str]): The type of the output to return - either a string (str),
-                a tensor of tokens (tensor) or whatever the format of the input was (input).
+            return_type (Optional[str]): The type of the output to return - a string or a list of strings ('str'),
+                a tensor of tokens ('tokens'), a tensor of output embeddings ('embeds') or whatever the format of the
+                input was ('input').
             verbose (bool): If True, show tqdm progress bars for generation.
 
         Returns:
-            outputs (torch.Tensor): [batch, pos + max_new_tokens], generated sequence of new tokens
-                (by default returns same type as input).
+            outputs (str, List[str], Int[torch.Tensor, "batch pos_plus_new_tokens"], Float[torch.Tensor,
+                "batch pos_plus_new_tokens hidden_size"]): generated sequence. Str, tokens or embeddings.
+                If input is embeddings and return type is tokens or string, returns only new generated sequence.
+                In other cases returns sequence including input sequence.
         """
 
         with utils.LocallyOverridenDefaults(
             self, prepend_bos=prepend_bos, padding_side=padding_side
         ):
-            if type(input) == str:
+            assert isinstance(input, (str, torch.Tensor, list)) and (
+                isinstance(input, list)
+                and all(isinstance(i, str) for i in input)
+                or not isinstance(input, list)
+            ), "Input must be either string, torch.Tensor, or List[str]"
+
+            assert return_type in [
+                "input",
+                "str",
+                "tokens",
+                "embeds",
+            ], "return_type must be one of ['input', 'str', 'tokens', 'embeds']"
+
+            if return_type == "input":
+                if isinstance(input, (str, list)):
+                    return_type = "str"
+                elif input.ndim == 2:
+                    return_type = "tokens"
+                else:
+                    return_type = "embeds"
+
+            if isinstance(input, (str, list)):
+                input_type = "str"
                 # If text, convert to tokens (batch_size=1)
                 assert (
                     self.tokenizer is not None
                 ), "Must provide a tokenizer if passing a string to the model"
-                tokens = self.to_tokens(input, prepend_bos=prepend_bos, padding_side=padding_side)
+                input = self.to_tokens(input, prepend_bos=prepend_bos, padding_side=padding_side)
+            elif input.ndim == 2:
+                input_type = "tokens"
             else:
-                tokens = input
+                input_type = "embeds"
 
-            if return_type == "input":
-                if type(input) == str:
-                    return_type = "str"
-                else:
-                    return_type = "tensor"
-
-            assert isinstance(tokens, torch.Tensor)
-            batch_size, ctx_length = tokens.shape
+            input_tokens = input if input_type in ["str", "tokens"] else None
+            batch_size, ctx_length = input.shape[0], input.shape[1]
             device = devices.get_device_for_block_index(0, self.cfg)
-            tokens = tokens.to(device)
+            input = input.to(device)
             if use_past_kv_cache:
                 past_kv_cache = HookedTransformerKeyValueCache.init_cache(
                     self.cfg, self.cfg.device, batch_size
                 )
             else:
                 past_kv_cache = None
+
+            shortformer_pos_embed = None
+            embeds = input if input_type == "embeds" else self.embed(input)
+
+            assert isinstance(embeds, torch.Tensor) and embeds.ndim == 3
 
             stop_tokens: List[int] = []
             eos_token_for_padding = 0
@@ -2154,53 +2224,87 @@ class HookedTransformer(HookedRootModule):
             # Currently nothing in HookedTransformer changes with eval, but this is here in case
             # that changes in the future.
             self.eval()
+            sampled_tokens_list = []
             for index in tqdm.tqdm(range(max_new_tokens), disable=not verbose):
+                pos_offset = self.get_pos_offset(past_kv_cache, batch_size)
+
+                tokens = torch.zeros((embeds.size(0), embeds.size(1))).to(torch.int)
+                attention_mask = utils.get_attention_mask(
+                    self.tokenizer, tokens, False if prepend_bos is None else prepend_bos
+                ).to(device)
+                residual, shortformer_pos_embed = self.get_residual(
+                    embeds,
+                    pos_offset,
+                    return_shortformer_pos_embed=True,
+                    device=device,
+                    attention_mask=attention_mask,
+                )
+
                 # While generating, we keep generating logits, throw away all but the final logits,
                 # and then use those logits to sample from the distribution We keep adding the
                 # sampled tokens to the end of tokens.
+                start_at_layer = 0  # Make forward returns embeddings
                 if use_past_kv_cache:
                     # We just take the final tokens, as a [batch, 1] tensor
                     if index > 0:
                         logits = self.forward(
-                            tokens[:, -1:],
+                            residual[:, -1:],
                             return_type="logits",
                             prepend_bos=prepend_bos,
                             padding_side=padding_side,
                             past_kv_cache=past_kv_cache,
+                            start_at_layer=start_at_layer,
+                            shortformer_pos_embed=shortformer_pos_embed,
                         )
                     else:
                         logits = self.forward(
-                            tokens,
+                            residual,
                             return_type="logits",
                             prepend_bos=prepend_bos,
                             padding_side=padding_side,
                             past_kv_cache=past_kv_cache,
+                            start_at_layer=start_at_layer,
+                            shortformer_pos_embed=shortformer_pos_embed,
                         )
                 else:
                     # We input the entire sequence, as a [batch, pos] tensor, since we aren't using
                     # the cache.
                     logits = self.forward(
-                        tokens,
+                        residual,
                         return_type="logits",
                         prepend_bos=prepend_bos,
                         padding_side=padding_side,
+                        start_at_layer=start_at_layer,
+                        shortformer_pos_embed=shortformer_pos_embed,
                     )
                 final_logits = logits[:, -1, :]
 
                 if do_sample:
-                    sampled_tokens = utils.sample_logits(
-                        final_logits,
-                        top_k=top_k,
-                        top_p=top_p,
-                        temperature=temperature,
-                        freq_penalty=freq_penalty,
-                        tokens=tokens,
-                    ).to(devices.get_device_for_block_index(0, self.cfg))
+                    if input_type in [
+                        "str",
+                        "tokens",
+                    ]:  # Those types of inputs support frequency penalty
+                        sampled_tokens = utils.sample_logits(
+                            final_logits,
+                            top_k=top_k,
+                            top_p=top_p,
+                            temperature=temperature,
+                            freq_penalty=freq_penalty,
+                            tokens=torch.cat(
+                                (input_tokens, torch.cat(sampled_tokens_list, dim=1)), dim=1
+                            )
+                            if "sampled_tokens" in locals()
+                            else input_tokens,
+                        ).to(devices.get_device_for_block_index(0, self.cfg))
+                    else:
+                        sampled_tokens = utils.sample_logits(
+                            final_logits, top_k=top_k, top_p=top_p, temperature=temperature
+                        ).to(devices.get_device_for_block_index(0, self.cfg))
                 else:
                     sampled_tokens = final_logits.argmax(-1).to(
                         devices.get_device_for_block_index(0, self.cfg)
                     )
-
+                sampled_tokens_list.append(sampled_tokens.unsqueeze(1))
                 if stop_at_eos:
                     # For all unfinished sequences, add on the next token. If a sequence was
                     # finished, throw away the generated token and add eos_token_for_padding
@@ -2213,20 +2317,27 @@ class HookedTransformer(HookedRootModule):
                         )
                     )
 
-                tokens = torch.cat([tokens, sampled_tokens.unsqueeze(-1)], dim=-1)
+                embeds = torch.hstack([embeds, self.embed(sampled_tokens.unsqueeze(-1))])
 
                 if stop_at_eos and finished_sequences.all():
                     break
 
-            if return_type == "str":
-                if self.cfg.default_prepend_bos:
-                    # If we prepended a BOS token, remove it when returning output.
-                    return self.tokenizer.decode(tokens[0, 1:])
-                else:
-                    return self.tokenizer.decode(tokens[0])
-
+            sampled_tokens = torch.cat(sampled_tokens_list, dim=1)
+            if input_type in ["str", "tokens"]:
+                output_tokens = torch.cat((input_tokens, sampled_tokens), dim=1)
             else:
-                return tokens
+                output_tokens = sampled_tokens
+
+            if return_type == "str":
+                decoded_texts = [
+                    self.tokenizer.decode(tokens, skip_special_tokens=True)
+                    for tokens in output_tokens
+                ]
+                return decoded_texts[0] if len(decoded_texts) == 1 else decoded_texts
+            elif return_type == "tokens":
+                return output_tokens
+            else:
+                return embeds
 
     # Give access to all weights as properties.
     @property

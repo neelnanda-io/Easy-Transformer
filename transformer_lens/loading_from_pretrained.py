@@ -1675,6 +1675,7 @@ def get_pretrained_model_config(
 
     if hf_cfg is not None:
         cfg_dict["load_in_4bit"] = hf_cfg.get("quantization_config", {}).get("load_in_4bit", False)
+        cfg_dict["d_vocab"] = hf_cfg.get("vocab_size", cfg_dict["d_vocab"])
     if first_n_layers is not None:
         cfg_dict["n_layers"] = first_n_layers
 

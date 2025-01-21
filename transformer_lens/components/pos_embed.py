@@ -27,7 +27,7 @@ class PosEmbed(nn.Module):
         tokens: Int[torch.Tensor, "batch pos"],
         past_kv_pos_offset: int = 0,
         attention_mask: Optional[Int[torch.Tensor, "batch offset_pos"]] = None,
-    ) -> Float[torch.Tensor, "batch pos d_model"]:
+    ) -> Float[torch.Tensor, "batch new_pos d_model"]:
         """
         Forward pass for positional embeddings.
 

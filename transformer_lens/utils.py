@@ -405,6 +405,9 @@ def sample_logits(
         final_logits = final_logits / temperature
         if freq_penalty > 0:
             assert tokens is not None, "Must provide input_tokens if applying a frequency penalty"
+            assert (
+                len(tokens.shape) == 2
+            ), "Frequency penalty do not support input in the form of embeddings"
             for batch_index in range(final_logits.shape[0]):
                 # torch.bincount returns a tensor of length d_vocab, with the number of occurences of each token in the tokens.
                 final_logits[batch_index] = final_logits[
@@ -1037,6 +1040,8 @@ def get_attention_mask(tokenizer, tokens: torch.Tensor, prepend_bos: bool) -> to
 
     # Initialize the attention mask with ones (indicating all tokens should be attended to)
     attention_mask = torch.ones_like(tokens)
+    if tokenizer is None:
+        return attention_mask
     is_not_pad_token = tokens.ne(tokenizer.pad_token_id)
 
     if tokenizer.padding_side == "right":
