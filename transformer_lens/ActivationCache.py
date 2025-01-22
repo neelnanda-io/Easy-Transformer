@@ -40,7 +40,7 @@ class ActivationCache:
 
     Examples:
 
-    When investigating a particular behaviour of a modal, a very common first step is to try and
+    When investigating a particular behaviour of a model, a very common first step is to try and
     understand which components of the model are most responsible for that behaviour. For example,
     if you're investigating the prompt "Why did the chicken cross the" -> " road", you might want to
     understand if there is a specific sublayer (mlp or multi-head attention) that is responsible for

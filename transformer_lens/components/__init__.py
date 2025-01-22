@@ -18,6 +18,8 @@ from .unembed import Unembed
 # Only dependent on independent modules
 from .attention import Attention
 from .bert_mlm_head import BertMLMHead
+from .bert_nsp_head import BertNSPHead
+from .bert_pooler import BertPooler
 from .embed import Embed
 from .grouped_query_attention import GroupedQueryAttention
 from .mlps.gated_mlp import GatedMLP

@@ -52,14 +52,24 @@ def convert_bert_weights(bert, cfg: HookedTransformerConfig):
         state_dict[f"blocks.{l}.ln2.w"] = block.output.LayerNorm.weight
         state_dict[f"blocks.{l}.ln2.b"] = block.output.LayerNorm.bias
 
+    pooler = bert.bert.pooler
+    state_dict["pooler.W"] = pooler.dense.weight.T
+    state_dict["pooler.b"] = pooler.dense.bias
+
     mlm_head = bert.cls.predictions
-    state_dict["mlm_head.W"] = mlm_head.transform.dense.weight
+    state_dict["mlm_head.W"] = mlm_head.transform.dense.weight.T
     state_dict["mlm_head.b"] = mlm_head.transform.dense.bias
     state_dict["mlm_head.ln.w"] = mlm_head.transform.LayerNorm.weight
     state_dict["mlm_head.ln.b"] = mlm_head.transform.LayerNorm.bias
+
+    # The NSP head does not have an unembedding
+    # so we are only using weights from the MLM head
     # Note: BERT uses tied embeddings
-    state_dict["unembed.W_U"] = embeddings.word_embeddings.weight.T
-    # "unembed.W_U": mlm_head.decoder.weight.T,
-    state_dict["unembed.b_U"] = mlm_head.bias
+    state_dict["unembed.W_U"] = mlm_head.decoder.weight.T
+    state_dict["unembed.b_U"] = mlm_head.decoder.bias
+
+    nsp_head = bert.cls.seq_relationship
+    state_dict["nsp_head.W"] = nsp_head.weight.T
+    state_dict["nsp_head.b"] = nsp_head.bias
 
     return state_dict

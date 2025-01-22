@@ -31,12 +31,10 @@ class HookedEncoder(HookedRootModule):
     This class implements a BERT-style encoder using the components in ./components.py, with HookPoints on every interesting activation. It inherits from HookedRootModule.
 
     Limitations:
-    - The current MVP implementation supports only the masked language modelling (MLM) task. Next sentence prediction (NSP), causal language modelling, and other tasks are not yet supported.
-    - Also note that model does not include dropouts, which may lead to inconsistent results from training or fine-tuning.
+    - The model does not include dropouts, which may lead to inconsistent results from training or fine-tuning.
 
     Like HookedTransformer, it can have a pretrained Transformer's weights loaded via `.from_pretrained`. There are a few features you might know from HookedTransformer which are not yet supported:
         - There is no preprocessing (e.g. LayerNorm folding) when loading a pretrained model
-        - The model only accepts tokens as inputs, and not strings, or lists of strings
     """
 
     def __init__(self, cfg, tokenizer=None, move_to_device=True, **kwargs):
@@ -70,7 +68,7 @@ class HookedEncoder(HookedRootModule):
 
         self.embed = BertEmbed(self.cfg)
         self.blocks = nn.ModuleList([BertBlock(self.cfg) for _ in range(self.cfg.n_layers)])
-        self.mlm_head = BertMLMHead(cfg)
+        self.mlm_head = BertMLMHead(self.cfg)
         self.unembed = Unembed(self.cfg)
 
         self.hook_full_embed = HookPoint()
@@ -80,43 +78,92 @@ class HookedEncoder(HookedRootModule):
 
         self.setup()
 
-    @overload
-    def forward(
+    def to_tokens(
         self,
-        input: Int[torch.Tensor, "batch pos"],
-        return_type: Literal["logits"],
-        token_type_ids: Optional[Int[torch.Tensor, "batch pos"]] = None,
-        one_zero_attention_mask: Optional[Int[torch.Tensor, "batch pos"]] = None,
-    ) -> Float[torch.Tensor, "batch pos d_vocab"]:
-        ...
-
-    @overload
-    def forward(
-        self,
-        input: Int[torch.Tensor, "batch pos"],
-        return_type: Literal[None],
-        token_type_ids: Optional[Int[torch.Tensor, "batch pos"]] = None,
-        one_zero_attention_mask: Optional[Int[torch.Tensor, "batch pos"]] = None,
-    ) -> Optional[Float[torch.Tensor, "batch pos d_vocab"]]:
-        ...
-
-    def forward(
-        self,
-        input: Int[torch.Tensor, "batch pos"],
-        return_type: Optional[str] = "logits",
-        token_type_ids: Optional[Int[torch.Tensor, "batch pos"]] = None,
-        one_zero_attention_mask: Optional[Int[torch.Tensor, "batch pos"]] = None,
-    ) -> Optional[Float[torch.Tensor, "batch pos d_vocab"]]:
-        """Input must be a batch of tokens. Strings and lists of strings are not yet supported.
-
-        return_type Optional[str]: The type of output to return. Can be one of: None (return nothing, don't calculate logits), or 'logits' (return logits).
-
-        token_type_ids Optional[torch.Tensor]: Binary ids indicating whether a token belongs to sequence A or B. For example, for two sentences: "[CLS] Sentence A [SEP] Sentence B [SEP]", token_type_ids would be [0, 0, ..., 0, 1, ..., 1, 1]. `0` represents tokens from Sentence A, `1` from Sentence B. If not provided, BERT assumes a single sequence input. Typically, shape is (batch_size, sequence_length).
-
-        one_zero_attention_mask: Optional[torch.Tensor]: A binary mask which indicates which tokens should be attended to (1) and which should be ignored (0). Primarily used for padding variable-length sentences in a batch. For instance, in a batch with sentences of differing lengths, shorter sentences are padded with 0s on the right. If not provided, the model assumes all tokens should be attended to.
+        input: Union[str, List[str]],
+        move_to_device: bool = True,
+        truncate: bool = True,
+    ) -> Tuple[
+        Int[torch.Tensor, "batch pos"],
+        Int[torch.Tensor, "batch pos"],
+        Int[torch.Tensor, "batch pos"],
+    ]:
+        """Converts a string to a tensor of tokens.
+        Taken mostly from the HookedTransformer implementation, but does not support default padding
+        sides or prepend_bos.
+        Args:
+            input (Union[str, List[str]]): The input to tokenize.
+            move_to_device (bool): Whether to move the output tensor of tokens to the device the
+                model lives on. Defaults to True
+            truncate (bool): If the output tokens are too long, whether to truncate the output
+                tokens to the model's max context window. Does nothing for shorter inputs.
+                Defaults to True.
         """
 
-        tokens = input
+        assert self.tokenizer is not None, "Cannot use to_tokens without a tokenizer"
+
+        encodings = self.tokenizer(
+            input,
+            return_tensors="pt",
+            padding=True,
+            truncation=truncate,
+            max_length=self.cfg.n_ctx if truncate else None,
+        )
+
+        tokens = encodings.input_ids
+
+        if move_to_device:
+            tokens = tokens.to(self.cfg.device)
+            token_type_ids = encodings.token_type_ids.to(self.cfg.device)
+            attention_mask = encodings.attention_mask.to(self.cfg.device)
+
+        return tokens, token_type_ids, attention_mask
+
+    def encoder_output(
+        self,
+        input: Union[str, List[str], Int[torch.Tensor, "batch pos"]],
+        token_type_ids: Optional[Int[torch.Tensor, "batch pos"]] = None,
+        one_zero_attention_mask: Optional[Int[torch.Tensor, "batch pos"]] = None,
+    ) -> Tuple[Float[torch.Tensor, "batch pos d_vocab"], Int[torch.Tensor, "batch pos"]]:
+        """Processes input through the encoder layers and returns the resulting residual stream.
+
+        Args:
+            input: The input to process. Can be one of:
+                - str: A single text string
+                - List[str]: A list of text strings
+                - torch.Tensor: Input tokens as integers with shape (batch, position)
+            token_type_ids: Optional binary ids indicating segment membership.
+                Shape (batch_size, sequence_length). For example, with input
+                "[CLS] Sentence A [SEP] Sentence B [SEP]", token_type_ids would be
+                [0, 0, ..., 0, 1, ..., 1, 1] where 0 marks tokens from sentence A
+                and 1 marks tokens from sentence B.
+            one_zero_attention_mask: Optional binary mask of shape (batch_size, sequence_length)
+                where 1 indicates tokens to attend to and 0 indicates tokens to ignore.
+                Used primarily for handling padding in batched inputs.
+
+        Returns:
+            Tuple containing:
+                - resid: Final residual stream tensor of shape (batch, position, d_model)
+                - tokens: Input tokens after processing and device placement
+
+        Raises:
+            AssertionError: If using string input without a tokenizer
+        """
+
+        if isinstance(input, str) or isinstance(input, list):
+            assert self.tokenizer is not None, "Must provide a tokenizer if input is a string"
+            tokens, token_type_ids_from_tokenizer, attention_mask = self.to_tokens(input)
+
+            # If token_type_ids or attention mask are not provided, use the ones from the tokenizer
+            token_type_ids = (
+                token_type_ids_from_tokenizer if token_type_ids is None else token_type_ids
+            )
+            one_zero_attention_mask = (
+                attention_mask if one_zero_attention_mask is None else one_zero_attention_mask
+            )
+
+        else:
+            tokens = input
 
         if tokens.device.type != self.cfg.device:
             tokens = tokens.to(self.cfg.device)
@@ -137,24 +184,120 @@ class HookedEncoder(HookedRootModule):
 
         for block in self.blocks:
             resid = block(resid, additive_attention_mask)
-        resid = self.mlm_head(resid)
 
-        if return_type is None:
+        return resid, tokens
+
+    @overload
+    def forward(
+        self,
+        input: Union[
+            str,
+            List[str],
+            Int[torch.Tensor, "batch pos"],
+        ],
+        return_type: Union[Literal["logits"], Literal["predictions"]],
+        token_type_ids: Optional[Int[torch.Tensor, "batch pos"]] = None,
+        one_zero_attention_mask: Optional[Int[torch.Tensor, "batch pos"]] = None,
+    ) -> Union[Float[torch.Tensor, "batch pos d_vocab"], str, List[str],]:
+        ...
+
+    @overload
+    def forward(
+        self,
+        input: Union[
+            str,
+            List[str],
+            Int[torch.Tensor, "batch pos"],
+        ],
+        return_type: Literal[None],
+        token_type_ids: Optional[Int[torch.Tensor, "batch pos"]] = None,
+        one_zero_attention_mask: Optional[Int[torch.Tensor, "batch pos"]] = None,
+    ) -> Optional[Union[Float[torch.Tensor, "batch pos d_vocab"], str, List[str],]]:
+        ...
+
+    def forward(
+        self,
+        input: Union[
+            str,
+            List[str],
+            Int[torch.Tensor, "batch pos"],
+        ],
+        return_type: Optional[str] = "logits",
+        token_type_ids: Optional[Int[torch.Tensor, "batch pos"]] = None,
+        one_zero_attention_mask: Optional[Int[torch.Tensor, "batch pos"]] = None,
+    ) -> Optional[Union[Float[torch.Tensor, "batch pos d_vocab"], str, List[str],]]:
+        """Forward pass through the HookedEncoder. Performs Masked Language Modelling on the given input.
+
+        Args:
+            input: The input to process. Can be one of:
+                - str: A single text string
+                - List[str]: A list of text strings
+                - torch.Tensor: Input tokens as integers with shape (batch, position)
+            return_type: Optional[str]: The type of output to return. Can be one of:
+                - None: Return nothing, don't calculate logits
+                - 'logits': Return logits tensor
+                - 'predictions': Return human-readable predictions
+            token_type_ids: Optional[torch.Tensor]: Binary ids indicating whether a token belongs
+                to sequence A or B. For example, for two sentences:
+                "[CLS] Sentence A [SEP] Sentence B [SEP]", token_type_ids would be
+                [0, 0, ..., 0, 1, ..., 1, 1]. `0` represents tokens from Sentence A,
+                `1` from Sentence B. If not provided, BERT assumes a single sequence input.
+                This parameter gets inferred from the the tokenizer if input is a string or list of strings.
+                Shape is (batch_size, sequence_length).
+            one_zero_attention_mask: Optional[torch.Tensor]: A binary mask which indicates
+                which tokens should be attended to (1) and which should be ignored (0).
+                Primarily used for padding variable-length sentences in a batch.
+                For instance, in a batch with sentences of differing lengths, shorter
+                sentences are padded with 0s on the right. If not provided, the model
+                assumes all tokens should be attended to.
+                This parameter gets inferred from the tokenizer if input is a string or list of strings.
+                Shape is (batch_size, sequence_length).
+
+        Returns:
+            Optional[torch.Tensor]: Depending on return_type:
+                - None: Returns None if return_type is None
+                - torch.Tensor: Returns logits if return_type is 'logits' (or if return_type is not explicitly provided)
+                    - Shape is (batch_size, sequence_length, d_vocab)
+                - str or List[str]: Returns predicted words for masked tokens if return_type is 'predictions'.
+                    Returns a list of strings if input is a list of strings, otherwise a single string.
+
+        Raises:
+            AssertionError: If using string input without a tokenizer
+        """
+
+        resid, tokens = self.encoder_output(input, token_type_ids, one_zero_attention_mask)
+
+        # MLM requires an unembedding step
+        resid = self.mlm_head(resid)
+        logits = self.unembed(resid)
+
+        if return_type == "predictions":
+            # Get predictions for masked tokens
+            logprobs = logits[tokens == self.tokenizer.mask_token_id].log_softmax(dim=-1)
+            predictions = self.tokenizer.decode(logprobs.argmax(dim=-1))
+
+            # If input was a list of strings, split predictions into a list
+            if " " in predictions:
+                # Split along space
+                predictions = predictions.split(" ")
+                predictions = [f"Prediction {i}: {p}" for i, p in enumerate(predictions)]
+            return predictions
+
+        elif return_type == None:
             return None
 
-        logits = self.unembed(resid)
         return logits
 
     @overload
     def run_with_cache(
         self, *model_args, return_cache_object: Literal[True] = True, **kwargs
-    ) -> Tuple[Float[torch.Tensor, "batch pos d_vocab"], ActivationCache]:
+    ) -> Tuple[Float[torch.Tensor, "batch pos d_vocab"], ActivationCache,]:
         ...
 
     @overload
     def run_with_cache(
         self, *model_args, return_cache_object: Literal[False], **kwargs
-    ) -> Tuple[Float[torch.Tensor, "batch pos d_vocab"], Dict[str, torch.Tensor]]:
+    ) -> Tuple[Float[torch.Tensor, "batch pos d_vocab"], Dict[str, torch.Tensor],]:
         ...
 
     def run_with_cache(

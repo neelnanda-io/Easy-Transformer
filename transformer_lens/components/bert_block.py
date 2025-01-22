@@ -45,7 +45,7 @@ class BertBlock(nn.Module):
         self,
         resid_pre: Float[torch.Tensor, "batch pos d_model"],
         additive_attention_mask: Optional[Float[torch.Tensor, "batch 1 1 pos"]] = None,
-    ):
+    ) -> Float[torch.Tensor, "batch pos d_model"]:
         resid_pre = self.hook_resid_pre(resid_pre)
 
         query_input = resid_pre

@@ -7,7 +7,7 @@ from typing import Dict, Optional, Union
 import einops
 import torch
 import torch.nn as nn
-from jaxtyping import Int
+from jaxtyping import Float, Int
 
 from transformer_lens.components import Embed, LayerNorm, PosEmbed, TokenTypeEmbed
 from transformer_lens.hook_points import HookPoint
@@ -35,7 +35,7 @@ class BertEmbed(nn.Module):
         self,
         input_ids: Int[torch.Tensor, "batch pos"],
         token_type_ids: Optional[Int[torch.Tensor, "batch pos"]] = None,
-    ):
+    ) -> Float[torch.Tensor, "batch pos d_model"]:
         base_index_id = torch.arange(input_ids.shape[1], device=input_ids.device)
         index_ids = einops.repeat(base_index_id, "pos -> batch pos", batch=input_ids.shape[0])
         if token_type_ids is None:
