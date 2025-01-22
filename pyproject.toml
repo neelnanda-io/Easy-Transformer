@@ -30,7 +30,7 @@
         sentencepiece="*"
         torch=">=2.2,<2.5"
         tqdm=">=4.64.1"
-        transformers=">=4.37.2,<4.43"
+        transformers=">=4.37.2"
         typing-extensions="*"
         wandb=">=0.13.5"
         typeguard = "^4.2"
