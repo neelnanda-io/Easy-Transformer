@@ -40,12 +40,21 @@ permissions:
 jobs:
   compatibility-checks:
     name: Compatibility Checks
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runs-on }}
     strategy:
+      fail-fast: false
       matrix:
         python-version:
           - "3.9"
           - "3.10"
+          - "3.11"
+        runs-on:
+          - ubuntu-latest
+        include:
+          - python-version: "3.11"
+            runs-on: macos-13
+          - python-version: "3.11"
+            runs-on: macos-latest
     steps:
       - uses: actions/checkout@v3
       - name: Install Poetry
@@ -120,9 +129,13 @@ jobs:
 
   notebook-checks:
     name: Notebook Checks
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runs-on }}
     strategy:
+      fail-fast: false
       matrix:
+        runs-on:
+          - ubuntu-latest
+          # - macos-13 # need to install pandoc in a mac-friendly way
         notebook:
           # - "Activation_Patching_in_TL_Demo"
           # - "Attribution_Patching_Demo"
