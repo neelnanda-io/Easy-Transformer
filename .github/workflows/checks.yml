@@ -130,7 +130,7 @@ jobs:
           - "Colab_Compatibility"
           - "BERT"
           - "Exploratory_Analysis_Demo"
-          # - "Grokking_Demo"
+          - "Grokking_Demo"
           # - "Head_Detector_Demo"
           - "Interactive_Neuroscope"
           # - "LLaMA"
