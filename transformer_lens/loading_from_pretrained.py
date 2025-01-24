@@ -796,7 +796,7 @@ def convert_hf_model_config(model_name: str, **kwargs):
             "rotary_dim": 4096 // 32,
             "final_rms": True,
             "gated_mlp": True,
-            "rotary_base": 1000000,
+            "rotary_base": 1000000.0,
         }
         if "python" in official_model_name.lower():
             # The vocab size of python version of CodeLlama-7b is 32000
