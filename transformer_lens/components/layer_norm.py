@@ -52,5 +52,5 @@ class LayerNorm(nn.Module):
         scale: Float[torch.Tensor, "batch pos 1"] = self.hook_scale(
             (x.pow(2).mean(-1, keepdim=True) + self.eps).sqrt()
         )
-        x = x / scale  # [batch, pos, length]
-        return self.hook_normalized(x * self.w + self.b).to(self.cfg.dtype)
+        x = self.hook_normalized(x / scale).to(self.cfg.dtype)  # [batch, pos, length]
+        return x * self.w + self.b
