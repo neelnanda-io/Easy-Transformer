@@ -66,7 +66,9 @@ class FactoredMatrix:
             "FactoredMatrix",
         ],
     ) -> Union["FactoredMatrix", Float[torch.Tensor, "... ldim"]]:
-        if isinstance(other, torch.Tensor):
+        if isinstance(other, FactoredMatrix):
+            return (self @ other.A) @ other.B
+        else:
             if other.ndim < 2:
                 # It's a vector, so we collapse the factorisation and just return a vector
                 # Squeezing/Unsqueezing is to preserve broadcasting working nicely
@@ -79,8 +81,6 @@ class FactoredMatrix:
                     return FactoredMatrix(self.A, self.B @ other)
                 else:
                     return FactoredMatrix(self.AB, other)
-        elif isinstance(other, FactoredMatrix):
-            return (self @ other.A) @ other.B
 
     @overload
     def __rmatmul__(  # type: ignore
@@ -107,7 +107,9 @@ class FactoredMatrix:
             "FactoredMatrix",
         ],
     ) -> Union["FactoredMatrix", Float[torch.Tensor, "... rdim"]]:
-        if isinstance(other, torch.Tensor):
+        if isinstance(other, FactoredMatrix):
+            return other.A @ (other.B @ self)
+        else:
             assert (
                 other.size(-1) == self.ldim
             ), f"Left matrix must match on inner dimension, shapes were self: {self.shape}, other:{other.shape}"
@@ -118,8 +120,6 @@ class FactoredMatrix:
                 return FactoredMatrix(other @ self.A, self.B)
             else:
                 return FactoredMatrix(other, self.AB)
-        elif isinstance(other, FactoredMatrix):
-            return other.A @ (other.B @ self)
 
     def __mul__(self, scalar: Union[int, float, torch.Tensor]) -> FactoredMatrix:
         """
