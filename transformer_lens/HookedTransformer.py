@@ -1270,25 +1270,32 @@ class HookedTransformer(HookedRootModule):
         ) and device in ["cpu", None]:
             logging.warning("float16 models may not work on CPU. Consider using a GPU or bfloat16.")
 
-        # Get the model name used in HuggingFace, rather than the alias.
-        official_model_name = loading.get_official_model_name(model_name)
+        try:
+            # Get the model name used in HuggingFace, rather than the alias.
+            resolved_model_name = loading.get_official_model_name(model_name)
+            model_type = "hf"
+        except ValueError:
+            resolved_model_name = model_name
+            model_type = "tl"
+            cfg = loading.load_tl_model_config(model_name)
 
         # Load the config into an HookedTransformerConfig object. If loading from a
         # checkpoint, the config object will contain the information about the
         # checkpoint
-        cfg = loading.get_pretrained_model_config(
-            official_model_name,
-            hf_cfg=hf_cfg,
-            checkpoint_index=checkpoint_index,
-            checkpoint_value=checkpoint_value,
-            fold_ln=fold_ln,
-            device=device,
-            n_devices=n_devices,
-            default_prepend_bos=default_prepend_bos,
-            dtype=dtype,
-            first_n_layers=first_n_layers,
-            **from_pretrained_kwargs,
-        )
+        if model_type == "hf":
+            cfg = loading.get_pretrained_model_config(
+                resolved_model_name,
+                hf_cfg=hf_cfg,
+                checkpoint_index=checkpoint_index,
+                checkpoint_value=checkpoint_value,
+                fold_ln=fold_ln,
+                device=device,
+                n_devices=n_devices,
+                default_prepend_bos=default_prepend_bos,
+                dtype=dtype,
+                first_n_layers=first_n_layers,
+                **from_pretrained_kwargs,
+            )
 
         if cfg.positional_embedding_type == "shortformer":
             if fold_ln:
@@ -1318,9 +1325,12 @@ class HookedTransformer(HookedRootModule):
 
         # Get the state dict of the model (ie a mapping of parameter names to tensors), processed to
         # match the HookedTransformer parameter names.
-        state_dict = loading.get_pretrained_state_dict(
-            official_model_name, cfg, hf_model, dtype=dtype, **from_pretrained_kwargs
-        )
+        if model_type == "hf":
+            state_dict = loading.get_pretrained_state_dict(
+                resolved_model_name, cfg, hf_model, dtype=dtype, **from_pretrained_kwargs
+            )
+        else:
+            state_dict = loading.load_tl_state_dict(model_name, dtype=dtype)
 
         # Create the HookedTransformer object
         model = cls(

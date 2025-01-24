@@ -730,6 +730,14 @@ def get_official_model_name(model_name: str):
     return official_model_name
 
 
+def load_tl_model_config(model_name: str):
+    """
+    Loads the model config for a TransformerLens model.
+    """
+    config = utils.download_file_from_hf(model_name, "tl_config.json")
+    return HookedTransformerConfig.from_dict(config)
+
+
 def convert_hf_model_config(model_name: str, **kwargs):
     """
     Returns the model config for a HuggingFace model, converted to a dictionary
@@ -1896,6 +1904,15 @@ def get_pretrained_state_dict(
             )
 
         return state_dict
+
+
+def load_tl_state_dict(model_name: str, dtype: torch.dtype = torch.float32):
+    """
+    Loads the state dict for a TransformerLens model.
+    """
+    state_dict = utils.download_file_from_hf(model_name, "state_dict.pth")
+    state_dict = {k: v.to(dtype) for k, v in state_dict.items()}
+    return state_dict
 
 
 def fill_missing_keys(model, state_dict):

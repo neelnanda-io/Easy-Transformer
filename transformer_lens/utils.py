@@ -6,10 +6,12 @@ This module contains varied utility functions used throughout the library.
 from __future__ import annotations
 
 import inspect
+import io
 import json
 import os
 import re
 import shutil
+import tempfile
 from copy import deepcopy
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union, cast
 
@@ -21,7 +23,7 @@ import torch.nn.functional as F
 import transformers
 from datasets.arrow_dataset import Dataset
 from datasets.load import load_dataset
-from huggingface_hub import hf_hub_download
+from huggingface_hub import CommitOperationAdd, HfApi, hf_hub_download
 from jaxtyping import Float, Int
 from rich import print as rprint
 from transformers import AutoTokenizer
@@ -65,6 +67,27 @@ def download_file_from_hf(
     else:
         print("File type not supported:", file_path.split(".")[-1])
         return file_path
+
+
+def upload_model_to_hf(model: "HookedTransformer", repo_name: str, commit_message: str = None):
+    """
+    Upload a model to the Hugging Face Hub.
+    """
+    api = HfApi()
+    config_buffer = io.BytesIO()
+    config_buffer.write(model.cfg.to_json(indent=2).encode("utf-8"))
+    config_buffer.seek(0)
+    add_config = CommitOperationAdd(path_or_fileobj=config_buffer, path_in_repo="tl_config.json")
+
+    with tempfile.TemporaryFile() as f:
+        torch.save(model.state_dict(), f)
+        f.seek(0)
+        add_model = CommitOperationAdd(path_or_fileobj=f, path_in_repo="state_dict.pth")
+        api.create_commit(
+            repo_id=repo_name,
+            operations=[add_config, add_model],
+            commit_message=commit_message,
+        )
 
 
 def clear_huggingface_cache():

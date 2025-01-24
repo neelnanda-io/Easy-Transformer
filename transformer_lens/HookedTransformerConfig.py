@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import pprint
 import random
+import json
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Union
 
@@ -355,10 +356,26 @@ class HookedTransformerConfig:
         Instantiates a `HookedTransformerConfig` from a Python dictionary of
         parameters.
         """
+        if isinstance(config_dict.get("dtype"), str):
+            config_dict = config_dict.copy()
+            config_dict["dtype"] = getattr(torch, config_dict["dtype"])
         return cls(**config_dict)
 
     def to_dict(self):
         return self.__dict__
+    
+    def to_json(self, indent=None):
+        def _serialize(obj):
+            if isinstance(obj, torch.dtype):
+                return str(obj).split(".")[1]
+            if hasattr(obj, 'dtype'):
+                if 'int' in str(obj.dtype):
+                    return int(obj)
+                if 'float' in str(obj.dtype):
+                    return float(obj)
+            return obj
+
+        return json.dumps(self.to_dict(), default=_serialize, indent=indent)
 
     def __repr__(self):
         return "HookedTransformerConfig:\n" + pprint.pformat(self.to_dict())
