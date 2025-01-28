@@ -108,9 +108,13 @@ class HookPoint(nn.Module):
                 module_output = module_output[0]
             return hook(module_output, hook=self)
 
-        full_hook.__name__ = (
-            hook.__repr__()
-        )  # annotate the `full_hook` with the string representation of the `hook` function
+        # annotate the `full_hook` with the string representation of the `hook` function
+        if isinstance(hook, partial):
+            # partial.__repr__() can be extremely slow if arguments contain large objects, which
+            # is common when caching tensors.
+            full_hook.__name__ = f"partial({hook.func.__repr__()},...)"
+        else:
+            full_hook.__name__ = hook.__repr__()
 
         if dir == "fwd":
             pt_handle = self.register_forward_hook(full_hook)
